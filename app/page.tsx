@@ -1,0 +1,142 @@
+"use client";
+
+import { useState } from "react";
+import type { PlanResponse } from "../lib/types";
+
+interface Row { id: string; name: string; favorites: string }
+
+let counter = 0;
+const blank = (name = "", favorites = ""): Row => ({ id: `f${++counter}`, name, favorites });
+
+const EXAMPLE = [
+  { name: "Asha", favorites: "Arijit Singh, Dune, Shake Shack" },
+  { name: "Ben", favorites: "Taylor Swift, Parasite, Sweetgreen" },
+  { name: "Chen", favorites: "Radiohead, Spirited Away, Joe's Pizza" },
+];
+
+export default function Home() {
+  const [city, setCity] = useState("");
+  const [priceMax, setPriceMax] = useState("");
+  const [rows, setRows] = useState<Row[]>(() => [blank(), blank()]);
+  const [res, setRes] = useState<PlanResponse | null>(null);
+  const [names, setNames] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const update = (id: string, patch: Partial<Row>) =>
+    setRows((rs) => rs.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+
+  function fillExample() {
+    setCity("New York");
+    setRows(EXAMPLE.map((e) => blank(e.name, e.favorites)));
+  }
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setErr("");
+    setRes(null);
+    const friends = rows.map((r) => ({
+      id: r.id,
+      name: r.name.trim() || "Friend",
+      favorites: r.favorites.split(",").map((s) => s.trim()).filter(Boolean),
+    }));
+    try {
+      const r = await fetch("/api/plan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ city, priceMax: priceMax ? Number(priceMax) : undefined, friends }),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error ?? "Something went wrong.");
+      setNames(Object.fromEntries(friends.map((f) => [f.id, f.name])));
+      setRes(data);
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : String(ex));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <main className="wrap">
+      <header className="intro">
+        <h1>Where can all of us agree?</h1>
+        <p>
+          Add each friend&apos;s favourite artists, films, restaurants or brands. We find places the
+          whole group will enjoy, and show who is the least happy with each pick.
+        </p>
+      </header>
+
+      <form onSubmit={submit}>
+        <h2>Your group</h2>
+        {rows.map((r, i) => (
+          <div className="friend" key={r.id}>
+            <label htmlFor={`n-${r.id}`}>Friend {i + 1} name</label>
+            <input id={`n-${r.id}`} value={r.name} onChange={(e) => update(r.id, { name: e.target.value })} />
+            <label htmlFor={`f-${r.id}`}>Favourites, separated by commas (up to 5)</label>
+            <textarea
+              id={`f-${r.id}`}
+              rows={2}
+              value={r.favorites}
+              onChange={(e) => update(r.id, { favorites: e.target.value })}
+            />
+            {rows.length > 2 && (
+              <div className="actions">
+                <button type="button" className="ghost" onClick={() => setRows((rs) => rs.filter((x) => x.id !== r.id))}>
+                  Remove {r.name.trim() || `friend ${i + 1}`}
+                </button>
+              </div>
+            )}
+          </div>
+        ))}
+
+        <label htmlFor="city">City</label>
+        <input id="city" required value={city} onChange={(e) => setCity(e.target.value)} />
+        <label htmlFor="price">Budget</label>
+        <select id="price" value={priceMax} onChange={(e) => setPriceMax(e.target.value)}>
+          <option value="">Any budget</option>
+          <option value="1">Level 1 (cheapest)</option>
+          <option value="2">Up to level 2</option>
+          <option value="3">Up to level 3</option>
+          <option value="4">Up to level 4</option>
+        </select>
+
+        <div className="actions">
+          <button type="submit" disabled={busy}>{busy ? "Finding places…" : "Find a place"}</button>
+          {rows.length < 6 && (
+            <button type="button" className="ghost" onClick={() => setRows((rs) => [...rs, blank()])}>
+              Add a friend
+            </button>
+          )}
+          <button type="button" className="ghost" onClick={fillExample}>Use an example group</button>
+        </div>
+      </form>
+
+      <section aria-live="polite">
+        <h2>Top picks</h2>
+        {err && <div className="error">{err}</div>}
+        {res?.warnings.map((w) => <div className="note" key={w}>{w}</div>)}
+        {!res && !err && <p className="empty">Fill in the group and choose Find a place.</p>}
+        {res?.ranked.map((p) => {
+          const weakest = Object.entries(p.perFriend).sort((a, b) => a[1] - b[1])[0]?.[0];
+          return (
+            <article className="place" key={p.id}>
+              <h3>{p.name}</h3>
+              <p className="fit">
+                Group fit {Math.round(p.combined * 100)}. Least happy: {names[weakest] ?? "n/a"}.
+              </p>
+              {Object.entries(p.perFriend).map(([id, v]) => (
+                <div className={`bar${id === weakest ? " weak" : ""}`} key={id}>
+                  <span>{names[id] ?? id}</span>
+                  <div className="track"><div className="fill" style={{ width: `${Math.round(v * 100)}%` }} /></div>
+                  <span>{Math.round(v * 100)}</span>
+                </div>
+              ))}
+            </article>
+          );
+        })}
+      </section>
+    </main>
+  );
+}
