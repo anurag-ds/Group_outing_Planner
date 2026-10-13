@@ -67,19 +67,20 @@ export async function qlooGet(endpoint: string, params: Params = {}): Promise<an
   }
 }
 
-/**
- * ASSUMPTION: confirm the /search params and response shape against the docs
- * (https://docs.qloo.com/reference/get-search) once the key works.
- */
-export async function searchEntity(name: string): Promise<{ id: string; name: string } | null> {
+/** Verified on a real response: results[] with entity_id, name, popularity, disambiguation. */
+export async function searchEntity(
+  name: string,
+): Promise<{ id: string; name: string; note?: string } | null> {
   const data = await qlooGet("/search", { query: name });
   const list = data?.results ?? data?.entities ?? [];
   const hit = Array.isArray(list) ? list[0] : undefined;
   const id = hit?.entity_id ?? hit?.id;
-  return id ? { id: String(id), name: String(hit?.name ?? name) } : null;
+  if (!id) return null;
+  const note = typeof hit?.disambiguation === "string" ? hit.disambiguation : undefined;
+  return { id: String(id), name: String(hit?.name ?? name), note };
 }
 
-/** ASSUMPTION: entities live at results.entities, score at query.affinity. Verify on the first real response. */
+/** Verified: entities at results.entities, score at query.affinity, explainability at query.explainability. */
 export async function insights(params: Params): Promise<RawEntity[]> {
   const data = await qlooGet("/v2/insights", params);
   return data?.results?.entities ?? data?.entities ?? [];

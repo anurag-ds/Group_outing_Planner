@@ -1,3 +1,5 @@
+export type OutingKey = "any" | "dinner" | "cafe" | "drinks" | "museum" | "park";
+
 export interface Friend {
   id: string;
   name: string;
@@ -8,28 +10,45 @@ export interface PlanRequest {
   city: string;
   friends: Friend[];
   priceMax?: number; // Qloo price level 1-4
+  outing?: OutingKey; // narrows places with a Qloo genre tag
 }
 
-/** One place with each friend's raw affinity score (0..1). */
+/** Which of a friend's favourites pushed a place up, from Qloo explainability. */
+export interface Why {
+  name: string;
+  score: number;
+}
+
+/** One place with each friend's raw Qloo affinity (0..1). */
 export interface Candidate {
   id: string;
   name: string;
   scores: Record<string, number>;
-  why?: Record<string, unknown>; // per-friend explainability from Qloo
+  why?: Record<string, Why[]>;
 }
 
 export interface Ranked {
   id: string;
   name: string;
-  combined: number;
+  combined: number; // on the affinity scale, used for ranking
   mean: number;
   min: number;
-  perFriend: Record<string, number>; // scaled 0..1
-  why?: Record<string, unknown>;
+  perFriend: Record<string, number>; // affinity adjusted for each friend's own baseline
+  raw: Record<string, number>; // Qloo affinity as returned
+  why?: Record<string, Why[]>;
+}
+
+/** How a typed favourite was understood by Qloo. */
+export interface Resolved {
+  friend: string;
+  input: string;
+  matched: string | null;
+  note?: string;
 }
 
 export interface PlanResponse {
   mode: "live" | "mock";
   ranked: Ranked[];
   warnings: string[];
+  resolved?: Resolved[];
 }

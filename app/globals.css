@@ -64,3 +64,7 @@ button:disabled { opacity: 0.5; cursor: wait; }
 .note { background: #fff7e0; border: 1px solid var(--sun); }
 .error { background: #fdecec; border: 1px solid #d9534f; }
 .empty { color: var(--muted); }
+.via { font-size: 0.8rem; color: var(--muted); margin: -0.15rem 0 0.35rem 6.6rem; }
+.resolved { font-size: 0.9rem; color: var(--muted); margin-top: 1rem; }
+.resolved summary { cursor: pointer; }
+.resolved ul { margin: 0.5rem 0 0; padding-left: 1.2rem; }

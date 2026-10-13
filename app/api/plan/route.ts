@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { isOutingKey } from "../../../lib/outings";
 import { mockPlan } from "../../../lib/mock";
 import { runPlan } from "../../../lib/plan";
 import type { PlanRequest } from "../../../lib/types";
@@ -19,6 +20,7 @@ function parse(body: any): PlanRequest | null {
     city: body.city.trim().slice(0, 80),
     friends,
     priceMax: price >= 1 && price <= 4 ? price : undefined,
+    outing: isOutingKey(body.outing) ? body.outing : "any",
   };
 }
 
