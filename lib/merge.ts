@@ -61,6 +61,7 @@ export function mergeScores(
         perFriend,
         raw: rawOut,
         why: c.why,
+        tags: c.tags,
       };
     })
     .sort((a, b) => b.combined - a.combined || b.min - a.min || a.name.localeCompare(b.name));

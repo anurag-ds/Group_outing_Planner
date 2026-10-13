@@ -16,12 +16,26 @@ function parse(body: any): PlanRequest | null {
   }));
   if (friends.some((f: { favorites: string[] }) => f.favorites.length === 0)) return null;
   const price = Number(body.priceMax);
+  const notes = typeof body.notes === "string" ? body.notes.trim().slice(0, 200) : "";
   return {
     city: body.city.trim().slice(0, 80),
     friends,
     priceMax: price >= 1 && price <= 4 ? price : undefined,
     outing: isOutingKey(body.outing) ? body.outing : "any",
+    notes: notes || undefined,
+    compare: body.compare === true,
   };
+}
+
+// Simple per-instance rate limit so a public demo cannot burn the Qloo and Gemini quotas.
+const hits = new Map<string, number[]>();
+function limited(ip: string) {
+  const now = Date.now();
+  if (hits.size > 5000) hits.clear();
+  const recent = (hits.get(ip) ?? []).filter((t) => now - t < 10 * 60_000);
+  recent.push(now);
+  hits.set(ip, recent);
+  return recent.length > 12;
 }
 
 export async function POST(request: Request) {
@@ -33,9 +47,15 @@ export async function POST(request: Request) {
     );
   }
   if (!process.env.QLOO_API_KEY) return NextResponse.json(mockPlan(req));
+
+  const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "local";
+  if (limited(ip)) {
+    return NextResponse.json({ error: "Too many requests. Please wait a few minutes and try again." }, { status: 429 });
+  }
   try {
     return NextResponse.json(await runPlan(req));
   } catch (err) {
+    console.error("plan failed", err);
     return NextResponse.json({ error: err instanceof Error ? err.message : "Planning failed" }, { status: 502 });
   }
 }

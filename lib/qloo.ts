@@ -28,6 +28,7 @@ export interface RawEntity {
   id?: string;
   name?: string;
   query?: { affinity?: number; explainability?: unknown };
+  tags?: { id?: string; name?: string; type?: string }[];
 }
 
 /** GET with X-Api-Key header, timeout, and a 24h file cache. */

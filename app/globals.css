@@ -68,3 +68,9 @@ button:disabled { opacity: 0.5; cursor: wait; }
 .resolved { font-size: 0.9rem; color: var(--muted); margin-top: 1rem; }
 .resolved summary { cursor: pointer; }
 .resolved ul { margin: 0.5rem 0 0; padding-left: 1.2rem; }
+.check { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.8rem; }
+.check input { width: auto; }
+.why { margin: 0 0 0.5rem; }
+.tags { margin: 0 0 0.6rem; font-size: 0.8rem; color: var(--muted); }
+.place.alt { border-style: dashed; }
+.llmonly { margin-top: 1.5rem; }

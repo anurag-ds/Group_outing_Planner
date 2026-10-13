@@ -1,7 +1,10 @@
+import { interpretNotes } from "./agent";
+import { explainPicks, llmOnlyPicks } from "./explain";
+import { geminiEnabled } from "./gemini";
 import { mergeScores } from "./merge";
 import { OUTINGS } from "./outings";
-import { affinityOf, entityId, insights, searchEntity, type RawEntity } from "./qloo";
-import type { Candidate, PlanRequest, PlanResponse, Resolved, Why } from "./types";
+import { affinityOf, entityId, insights, QlooError, searchEntity, type RawEntity } from "./qloo";
+import type { AgentTrace, Candidate, PlanRequest, PlanResponse, Resolved, Why } from "./types";
 
 const unique = <T,>(xs: T[]) => [...new Set(xs)];
 
@@ -14,9 +17,14 @@ function whyOf(e: RawEntity, nameOf: Record<string, string>): Why[] {
     .sort((a: Why, b: Why) => b.score - a.score);
 }
 
+const KEEP_TAG = /:(ambience|genre|setting|activity_type|time_of_day_fit|cuisine|dining_option):/;
+const tagNames = (e: RawEntity) =>
+  unique((e.tags ?? []).filter((t) => t.id && KEEP_TAG.test(t.id)).map((t) => t.name ?? "").filter(Boolean)).slice(0, 6);
+
 export async function runPlan(req: PlanRequest): Promise<PlanResponse> {
   const warnings: string[] = [];
   const resolved: Resolved[] = [];
+  const names: Record<string, string> = Object.fromEntries(req.friends.map((f) => [f.id, f.name]));
 
   // 1. Resolve every favourite name to a Qloo entity ID.
   const lookups = await Promise.all(
@@ -36,6 +44,27 @@ export async function runPlan(req: PlanRequest): Promise<PlanResponse> {
   const active = req.friends.filter((f) => ids[f.id]?.length);
   if (active.length < 2) throw new Error("Need at least two friends with a favourite Qloo recognises.");
 
+  // 2. Agent: turn free-text wishes into real Qloo tags (soft preferences and hard exclusions).
+  let agent: AgentTrace | undefined;
+  let wishParams: Record<string, string | undefined> = {};
+  if (req.notes) {
+    if (!geminiEnabled()) {
+      warnings.push("Your notes were ignored because GEMINI_API_KEY is not set.");
+    } else {
+      try {
+        const a = await interpretNotes(req.notes);
+        agent = { trace: a.trace, include: a.include.map((t) => t.name), exclude: a.exclude.map((t) => t.name) };
+        wishParams = {
+          "signal.interests.tags": a.include.map((t) => t.id).join(",") || undefined,
+          "filter.exclude.tags": a.exclude.map((t) => t.id).join(",") || undefined,
+        };
+      } catch (err) {
+        console.error("agent step failed", err);
+        warnings.push("The AI step was skipped, so your notes were not applied.");
+      }
+    }
+  }
+
   const where = {
     "filter.type": "urn:entity:place",
     "filter.location.query": req.city,
@@ -43,19 +72,25 @@ export async function runPlan(req: PlanRequest): Promise<PlanResponse> {
     "filter.tags": req.outing ? OUTINGS[req.outing].tag : undefined,
     take: 50,
   };
+  const groupSignal = { "signal.interests.entities": unique(active.flatMap((f) => ids[f.id])).join(",") };
 
-  // 2. Candidate pool: places that fit the whole group's taste.
-  const pool = await insights({
-    ...where,
-    "signal.interests.entities": unique(active.flatMap((f) => ids[f.id])).join(","),
-  });
+  // 3. Candidate pool: places that fit the whole group's taste (and the wishes, if any).
+  let pool: RawEntity[];
+  try {
+    pool = await insights({ ...where, ...groupSignal, ...wishParams });
+  } catch (err) {
+    if (!(err instanceof QlooError) || err.status !== 400 || Object.values(wishParams).every((v) => !v)) throw err;
+    warnings.push("Qloo rejected the preference filters, so they were not applied.");
+    agent = undefined;
+    pool = await insights({ ...where, ...groupSignal });
+  }
   if (pool.length === 0) {
     warnings.push("Qloo returned no places for this city and outing type. Try another outing type, budget or a larger city.");
-    return { mode: "live", ranked: [], warnings, resolved };
+    return { mode: "live", ranked: [], warnings, resolved, agent };
   }
   const candidateIds = pool.map(entityId).join(",");
 
-  // 3. Score the same candidates separately for each friend.
+  // 4. Score the same candidates separately for each friend.
   const perFriend = await Promise.all(
     active.map((f) =>
       insights({
@@ -68,7 +103,7 @@ export async function runPlan(req: PlanRequest): Promise<PlanResponse> {
   );
 
   const candidates: Candidate[] = pool.map((p) => {
-    const c: Candidate = { id: entityId(p), name: p.name ?? "Unnamed place", scores: {}, why: {} };
+    const c: Candidate = { id: entityId(p), name: p.name ?? "Unnamed place", scores: {}, why: {}, tags: tagNames(p) };
     active.forEach((f, i) => {
       const hit = perFriend[i].find((e) => entityId(e) === c.id);
       if (hit) {
@@ -79,7 +114,29 @@ export async function runPlan(req: PlanRequest): Promise<PlanResponse> {
     return c;
   });
 
-  // 4. Merge into one fair ranking.
+  // 5. Merge into one fair ranking.
   const ranked = mergeScores(candidates, active.map((f) => f.id)).slice(0, 3);
-  return { mode: "live", ranked, warnings, resolved };
+
+  // 6. Optional AI extras: explanations from Qloo data only, and the LLM-only comparison.
+  let llmOnly: PlanResponse["llmOnly"];
+  if (geminiEnabled()) {
+    const [explained, other] = await Promise.allSettled([
+      explainPicks(ranked, names),
+      req.compare ? llmOnlyPicks(req) : Promise.resolve(undefined),
+    ]);
+    if (explained.status === "fulfilled") ranked.forEach((r) => (r.explanation = explained.value[r.id]));
+    else {
+      console.error("explain step failed", explained.reason);
+      warnings.push("Explanations were skipped.");
+    }
+    if (other.status === "fulfilled") llmOnly = other.value;
+    else {
+      console.error("compare step failed", other.reason);
+      warnings.push("The LLM-only comparison was skipped.");
+    }
+  } else if (req.compare) {
+    warnings.push("The comparison needs GEMINI_API_KEY.");
+  }
+
+  return { mode: "live", ranked, warnings, resolved, agent, llmOnly };
 }
