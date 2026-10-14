@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { isOutingKey } from "../../../lib/outings";
 import { mockPlan } from "../../../lib/mock";
 import { runPlan } from "../../../lib/plan";
+import { QlooError } from "../../../lib/qloo";
 import type { PlanRequest } from "../../../lib/types";
 
 function parse(body: any): PlanRequest | null {
@@ -56,6 +57,12 @@ export async function POST(request: Request) {
     return NextResponse.json(await runPlan(req));
   } catch (err) {
     console.error("plan failed", err);
+    if (err instanceof QlooError && err.status === 429) {
+      return NextResponse.json(
+        { error: "Qloo is busy right now. Please wait a minute and try again." },
+        { status: 429 },
+      );
+    }
     return NextResponse.json({ error: err instanceof Error ? err.message : "Planning failed" }, { status: 502 });
   }
 }

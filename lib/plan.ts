@@ -2,6 +2,7 @@ import { interpretNotes } from "./agent";
 import { explainPicks, llmOnlyPicks, templateExplanation } from "./explain";
 import { geminiEnabled } from "./gemini";
 import { mergeScores } from "./merge";
+import { mapLimit } from "./pool";
 import { OUTINGS } from "./outings";
 import { affinityOf, entityId, insights, QlooError, searchEntity, type RawEntity } from "./qloo";
 import type { AgentTrace, Candidate, PlanRequest, PlanResponse, Resolved, Why } from "./types";
@@ -34,8 +35,10 @@ export async function runPlan(req: PlanRequest): Promise<PlanResponse> {
   };
 
   // 1. Resolve every favourite name to a Qloo entity ID.
-  const lookups = await Promise.all(
-    req.friends.flatMap((f) => f.favorites.map(async (fav) => ({ f, fav, hit: await searchEntity(fav) }))),
+  const lookups = await mapLimit(
+    req.friends.flatMap((f) => f.favorites.map((fav) => ({ f, fav }))),
+    3,
+    async ({ f, fav }) => ({ f, fav, hit: await searchEntity(fav) }),
   );
   const ids: Record<string, string[]> = {};
   const nameOf: Record<string, string> = {};
@@ -97,15 +100,13 @@ export async function runPlan(req: PlanRequest): Promise<PlanResponse> {
   const candidateIds = pool.map(entityId).join(",");
 
   // 4. Score the same candidates separately for each friend.
-  const perFriend = await Promise.all(
-    active.map((f) =>
-      insights({
-        ...where,
-        "signal.interests.entities": ids[f.id].join(","),
-        "filter.results.entities": candidateIds,
-        "feature.explainability": true,
-      }),
-    ),
+  const perFriend = await mapLimit(active, 3, (f) =>
+    insights({
+      ...where,
+      "signal.interests.entities": ids[f.id].join(","),
+      "filter.results.entities": candidateIds,
+      "feature.explainability": true,
+    }),
   );
 
   const candidates: Candidate[] = pool.map((p) => {
@@ -132,9 +133,9 @@ export async function runPlan(req: PlanRequest): Promise<PlanResponse> {
       req.compare ? llmOnlyPicks(req) : Promise.resolve(undefined),
     ]);
     if (explained.status === "fulfilled") ranked.forEach((r) => (r.explanation = explained.value[r.id] ?? r.explanation));
-    else noteAI(explained.reason, "AI explanations");
+    else noteAI(explained.reason, "Writing AI explanations");
     if (other.status === "fulfilled") llmOnly = other.value;
-    else noteAI(other.reason, "The LLM-only comparison");
+    else noteAI(other.reason, "Running the LLM-only comparison");
   } else if (req.compare) {
     warnings.push("The comparison needs GEMINI_API_KEY.");
   }

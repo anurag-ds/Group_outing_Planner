@@ -7,12 +7,15 @@ const BASE_URL = process.env.QLOO_API_URL ?? "https://hackathon.api.qloo.com";
 // Private server-side cache, kept outside the repo. Never commit Qloo response data.
 const CACHE_DIR = process.env.QLOO_CACHE_DIR ?? path.join(os.tmpdir(), "qloo-cache");
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const RETRY_MS = Number(process.env.QLOO_RETRY_MS ?? 1000);
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const HINTS: Record<number, string> = {
   400: "Bad parameters, or the city (locality) was not found.",
   401: "Check X-Api-Key and that QLOO_API_URL is https://hackathon.api.qloo.com.",
   403: "Unsupported entity type. Use urn:entity:place, artist, movie, etc.",
   404: "Endpoint path is missing or wrong.",
+  429: "Qloo is rate limiting this key. Wait a minute and try again.",
 };
 
 export class QlooError extends Error {
@@ -52,19 +55,28 @@ export async function qlooGet(endpoint: string, params: Params = {}): Promise<an
     /* cache miss */
   }
 
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 30_000);
-  try {
-    const res = await fetch(url, { headers: { "X-Api-Key": key }, signal: ctrl.signal });
-    if (!res.ok) {
+  for (let attempt = 0; ; attempt++) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 30_000);
+    try {
+      const res = await fetch(url, { headers: { "X-Api-Key": key }, signal: ctrl.signal });
+      if (res.ok) {
+        const data = await res.json();
+        await mkdir(CACHE_DIR, { recursive: true });
+        await writeFile(cacheFile, JSON.stringify({ ts: Date.now(), data })).catch(() => {});
+        return data;
+      }
+      if (res.status === 429 && attempt < 2) {
+        const retryAfter = Number(res.headers.get("retry-after"));
+        await sleep(retryAfter > 0 && retryAfter <= 5 ? retryAfter * 1000 : RETRY_MS * (attempt + 1));
+        continue;
+      }
+      // Qloo's own message goes to the server log only, never to the browser.
+      console.error(`Qloo ${res.status} on ${endpoint}: ${(await res.text().catch(() => "")).slice(0, 300)}`);
       throw new QlooError(res.status, `Qloo ${res.status} on ${endpoint}. ${HINTS[res.status] ?? ""}`.trim());
+    } finally {
+      clearTimeout(timer);
     }
-    const data = await res.json();
-    await mkdir(CACHE_DIR, { recursive: true });
-    await writeFile(cacheFile, JSON.stringify({ ts: Date.now(), data })).catch(() => {});
-    return data;
-  } finally {
-    clearTimeout(timer);
   }
 }
 
