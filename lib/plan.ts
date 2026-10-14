@@ -1,5 +1,5 @@
 import { interpretNotes } from "./agent";
-import { explainPicks, llmOnlyPicks } from "./explain";
+import { explainPicks, llmOnlyPicks, templateExplanation } from "./explain";
 import { geminiEnabled } from "./gemini";
 import { mergeScores } from "./merge";
 import { OUTINGS } from "./outings";
@@ -25,6 +25,13 @@ export async function runPlan(req: PlanRequest): Promise<PlanResponse> {
   const warnings: string[] = [];
   const resolved: Resolved[] = [];
   const names: Record<string, string> = Object.fromEntries(req.friends.map((f) => [f.id, f.name]));
+
+  let quotaHit = false;
+  const noteAI = (err: unknown, what: string) => {
+    console.error(`${what} failed`, err);
+    if (String((err as Error)?.message ?? err).includes("Gemini 429")) quotaHit = true;
+    else warnings.push(`${what} was skipped because the AI step failed.`);
+  };
 
   // 1. Resolve every favourite name to a Qloo entity ID.
   const lookups = await Promise.all(
@@ -59,8 +66,7 @@ export async function runPlan(req: PlanRequest): Promise<PlanResponse> {
           "filter.exclude.tags": a.exclude.map((t) => t.id).join(",") || undefined,
         };
       } catch (err) {
-        console.error("agent step failed", err);
-        warnings.push("The AI step was skipped, so your notes were not applied.");
+        noteAI(err, "Applying your notes");
       }
     }
   }
@@ -116,6 +122,7 @@ export async function runPlan(req: PlanRequest): Promise<PlanResponse> {
 
   // 5. Merge into one fair ranking.
   const ranked = mergeScores(candidates, active.map((f) => f.id)).slice(0, 3);
+  ranked.forEach((r) => (r.explanation = templateExplanation(r, names)));
 
   // 6. Optional AI extras: explanations from Qloo data only, and the LLM-only comparison.
   let llmOnly: PlanResponse["llmOnly"];
@@ -124,19 +131,18 @@ export async function runPlan(req: PlanRequest): Promise<PlanResponse> {
       explainPicks(ranked, names),
       req.compare ? llmOnlyPicks(req) : Promise.resolve(undefined),
     ]);
-    if (explained.status === "fulfilled") ranked.forEach((r) => (r.explanation = explained.value[r.id]));
-    else {
-      console.error("explain step failed", explained.reason);
-      warnings.push("Explanations were skipped.");
-    }
+    if (explained.status === "fulfilled") ranked.forEach((r) => (r.explanation = explained.value[r.id] ?? r.explanation));
+    else noteAI(explained.reason, "AI explanations");
     if (other.status === "fulfilled") llmOnly = other.value;
-    else {
-      console.error("compare step failed", other.reason);
-      warnings.push("The LLM-only comparison was skipped.");
-    }
+    else noteAI(other.reason, "The LLM-only comparison");
   } else if (req.compare) {
     warnings.push("The comparison needs GEMINI_API_KEY.");
   }
 
+  if (quotaHit) {
+    warnings.push(
+      "The free Gemini quota is used up for now. Notes and the LLM-only comparison are unavailable, and the summaries below come straight from Qloo data.",
+    );
+  }
   return { mode: "live", ranked, warnings, resolved, agent, llmOnly };
 }

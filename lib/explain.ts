@@ -58,3 +58,14 @@ export async function llmOnlyPicks(req: PlanRequest): Promise<LlmOnlyPick[]> {
     .slice(0, 3)
     .map((x: any) => ({ name: String(x.name).slice(0, 80), why: String(x.why ?? "").slice(0, 200) }));
 }
+
+/** Fallback summary built only from Qloo data, used when no AI is available. */
+export function templateExplanation(p: Ranked, names: Record<string, string>): string {
+  const sorted = Object.entries(p.raw).sort((a, b) => b[1] - a[1]);
+  if (sorted.length === 0) return "";
+  const [topId, topV] = sorted[0];
+  const [lowId, lowV] = sorted[sorted.length - 1];
+  const nm = (id: string) => names[id] ?? id;
+  const kind = (p.tags ?? []).slice(0, 3).join(", ");
+  return `${kind ? `${kind}. ` : ""}Best match for ${nm(topId)} (${Math.round(topV * 100)}), lowest for ${nm(lowId)} (${Math.round(lowV * 100)}).`;
+}
