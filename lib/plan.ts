@@ -57,25 +57,29 @@ export async function runPlan(req: PlanRequest): Promise<PlanResponse> {
   // 2. Agent: turn free-text wishes into real Qloo tags (soft preferences and hard exclusions).
   let agent: AgentTrace | undefined;
   let wishParams: Record<string, string | undefined> = {};
+  let agentExclude: string[] = [];
   if (req.notes) {
     if (!geminiEnabled()) {
       warnings.push("Your notes were ignored because GEMINI_API_KEY is not set.");
     } else {
       try {
-        const a = await interpretNotes(req.notes);
+        const a = await interpretNotes(req.notes, req.outing ?? "any");
         agent = { trace: a.trace, include: a.include.map((t) => t.name), exclude: a.exclude.map((t) => t.name) };
-        wishParams = {
-          "signal.interests.tags": a.include.map((t) => t.id).join(",") || undefined,
-          "filter.exclude.tags": a.exclude.map((t) => t.id).join(",") || undefined,
-        };
+        wishParams = { "signal.interests.tags": a.include.map((t) => t.id).join(",") || undefined };
+        agentExclude = a.exclude.map((t) => t.id);
       } catch (err) {
         noteAI(err, "Applying your notes");
       }
     }
   }
 
+  // Tags to leave out: sub-types the outing does not want, plus anything the agent was told to avoid.
+  const outingExclude = req.outing ? (OUTINGS[req.outing].exclude ?? []) : [];
+  const excludeParam = (extra: string[]) => unique([...outingExclude, ...extra]).join(",") || undefined;
+
   const where = {
     "filter.type": "urn:entity:place",
+    "filter.exclude.tags": excludeParam([]),
     "filter.location.query": req.city,
     "filter.price_level.max": req.priceMax,
     "filter.tags": req.outing ? OUTINGS[req.outing].tag : undefined,
@@ -86,9 +90,9 @@ export async function runPlan(req: PlanRequest): Promise<PlanResponse> {
   // 3. Candidate pool: places that fit the whole group's taste (and the wishes, if any).
   let pool: RawEntity[];
   try {
-    pool = await insights({ ...where, ...groupSignal, ...wishParams });
+    pool = await insights({ ...where, ...groupSignal, ...wishParams, "filter.exclude.tags": excludeParam(agentExclude) });
   } catch (err) {
-    if (!(err instanceof QlooError) || err.status !== 400 || Object.values(wishParams).every((v) => !v)) throw err;
+    if (!(err instanceof QlooError) || err.status !== 400 || (!wishParams["signal.interests.tags"] && agentExclude.length === 0)) throw err;
     warnings.push("Qloo rejected the preference filters, so they were not applied.");
     agent = undefined;
     pool = await insights({ ...where, ...groupSignal });
