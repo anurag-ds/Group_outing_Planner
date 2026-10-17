@@ -52,6 +52,26 @@ describe("interpretNotes", () => {
     expect(first).toContain("Museum");
   });
 
+  it("looks up several keywords in one model turn", async () => {
+    const replies = [
+      call("find_tags", { queries: ["quiet", "vegetarian"] }),
+      call("finish", { include_tag_ids: [quiet.id], exclude_tag_ids: [] }),
+    ];
+    let i = 0;
+    const asked: string[] = [];
+    const out = await interpretNotes("quiet, vegetarian", "dinner", {
+      generate: async () => replies[i++],
+      findTags: async (q) => {
+        asked.push(q);
+        return q === "quiet" ? [quiet] : [];
+      },
+    });
+    expect(i).toBe(2);
+    expect(asked).toEqual(["quiet", "vegetarian"]);
+    expect(out.include).toEqual([quiet]);
+    expect(out.trace).toHaveLength(3);
+  });
+
   it("returns no filters when the model calls no tool", async () => {
     const out = await interpretNotes("anything", "any", {
       generate: async () => ({ role: "model", parts: [{ text: "hello" }] }),

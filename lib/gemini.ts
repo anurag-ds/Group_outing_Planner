@@ -70,8 +70,8 @@ export async function generate({ system, contents, tools, json }: GenerateArgs):
         }
         return content;
       }
-      if (attempt < 1 && RETRY_STATUS.includes(res.status)) {
-        await new Promise((r) => setTimeout(r, 1500));
+      if (attempt < 2 && RETRY_STATUS.includes(res.status)) {
+        await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
         continue;
       }
       throw new Error(`Gemini ${res.status}: ${(await res.text()).slice(0, 200)}`);

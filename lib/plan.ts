@@ -31,7 +31,12 @@ export async function runPlan(req: PlanRequest): Promise<PlanResponse> {
   const noteAI = (err: unknown, what: string) => {
     console.error(`${what} failed`, err);
     if (String((err as Error)?.message ?? err).includes("Gemini 429")) quotaHit = true;
-    else warnings.push(`${what} was skipped because the AI step failed.`);
+    else {
+      const msg = String((err as Error)?.message ?? err);
+      const code = /Gemini (\d{3})/.exec(msg)?.[1];
+      const detail = code ? ` (error ${code})` : (err as Error)?.name === "AbortError" ? " (timed out)" : "";
+      warnings.push(`${what} was skipped because the AI step failed${detail}.`);
+    }
   };
 
   // 1. Resolve every favourite name to a Qloo entity ID.
@@ -133,7 +138,8 @@ export async function runPlan(req: PlanRequest): Promise<PlanResponse> {
   let llmOnly: PlanResponse["llmOnly"];
   if (geminiEnabled()) {
     const [explained, other] = await Promise.allSettled([
-      explainPicks(ranked, names),
+      // AI is opt-in: a plain run makes no Gemini calls, so visitors cannot use up the daily quota.
+      req.notes ? explainPicks(ranked, names) : Promise.resolve({} as Record<string, string>),
       req.compare ? llmOnlyPicks(req) : Promise.resolve(undefined),
     ]);
     if (explained.status === "fulfilled") ranked.forEach((r) => (r.explanation = explained.value[r.id] ?? r.explanation));
